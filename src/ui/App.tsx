@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useAccount, useConnect, useDisconnect } from 'wagmi'
-import { injected } from 'wagmi/connectors'
+import { useAccount, useDisconnect } from 'wagmi'
 import { createGame } from '../game/Game'
 import type { GameSnapshot } from '../game/types'
 
@@ -8,7 +7,6 @@ type Screen = 'menu' | 'game' | 'results'
 
 export default function App() {
   const { address, isConnected } = useAccount()
-  const { connect } = useConnect()
   const { disconnect } = useDisconnect()
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -65,7 +63,7 @@ export default function App() {
         <div className="brand">Arena Shooter Web3</div>
         <div className="wallet-row">
           {!isConnected ? (
-            <button onClick={() => connect({ connector: injected() })}>
+            <button onClick={() => alert('Use the wallet button from Web3Modal')}>
               Connect Wallet
             </button>
           ) : (
