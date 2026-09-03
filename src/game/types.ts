@@ -1,21 +1,50 @@
-export type Vector2 = {
-  x: number
-  y: number
+export type Vec2 = { x: number; y: number }
+
+export type WeaponId = 'pistol' | 'shotgun' | 'rifle' | 'sniper' | 'rocket'
+
+export type WeaponStats = {
+  name: string
+  damage: number
+  fireRate: number
+  speed: number
+  spread: number
+  pellets?: number
 }
 
-export type Player = {
+export type PlayerState = {
   id: string
   x: number
   y: number
   vx: number
   vy: number
-  width: number
-  height: number
-  facing: -1 | 1
   hp: number
-  maxHp: number
-  fuel: number
-  maxFuel: number
-  isBot: boolean
-  color: string
+  jet: number
+  facing: 1 | -1
+  onGround: boolean
+  kills: number
+  deaths: number
+  weapon: WeaponId
+  reload: number
+  fireCooldown: number
+  alive: boolean
+  isBot?: boolean
+}
+
+export type Projectile = {
+  x: number
+  y: number
+  vx: number
+  vy: number
+  life: number
+  ownerId: string
+  damage: number
+  radius: number
+  isRocket?: boolean
+}
+
+export type Pickup = {
+  x: number
+  y: number
+  kind: 'medkit' | 'ammo' | 'jet'
+  active: boolean
 }
