@@ -48,3 +48,10 @@ export type Pickup = {
   kind: 'medkit' | 'ammo' | 'jet'
   active: boolean
 }
+
+export type GameSnapshot = {
+  winner: 'player' | 'bots'
+  kills: number
+  deaths: number
+  accuracy: number
+}
