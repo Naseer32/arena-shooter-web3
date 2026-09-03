@@ -1,232 +1,325 @@
-import type { GameSnapshot, Vec2 } from './types'
+// src/game/Game.ts
+import { DEFAULT_WEAPON, WEAPONS } from './loadout'
+import type { GameSnapshot, Pickup, PlayerState, Projectile, Vec2, WeaponId } from './types'
 
-type Entity = {
-  pos: Vec2
-  vel: Vec2
-  radius: number
-  color: string
-}
+type Platform = { x: number; y: number; w: number; h: number }
 
-export function createGame(
-  canvas: HTMLCanvasElement,
-  onFinish: (snapshot: GameSnapshot) => void,
-) {
-  const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('Canvas context unavailable')
+export class Game {
+  canvas: HTMLCanvasElement
+  ctx: CanvasRenderingContext2D
+  running = true
 
-  let running = true
-  let finished = false
-  let last = performance.now()
-  const startTime = performance.now()
+  width = 0
+  height = 0
+  timeLeft = 300000
+  killLimit = 15
 
-  const player: Entity = {
-    pos: { x: 180, y: 560 },
-    vel: { x: 0, y: 0 },
-    radius: 18,
-    color: '#9be15d',
+  player: PlayerState
+  bots: PlayerState[] = []
+  projectiles: Projectile[] = []
+  pickups: Pickup[] = []
+  platforms: Platform[] = []
+
+  keys = new Set<string>()
+  mouse = { x: 0, y: 0, down: false }
+
+  stats = {
+    shots: 0,
+    hits: 0,
   }
 
-  const bots: Entity[] = Array.from({ length: 5 }, (_, i) => ({
-    pos: { x: 600 + i * 120, y: 560 - (i % 2) * 80 },
-    vel: { x: 0, y: 0 },
-    radius: 16,
-    color: '#ff6b6b',
-  }))
+  lastTs = 0
+  winner: 'player' | 'bots' | null = null
 
-  let kills = 0
-  let deaths = 0
-  let shots = 0
-  let hits = 0
-  let shotCooldown = 0
-  const gravity = 1800
-  let jetFuel = 100
+  constructor(canvas: HTMLCanvasElement) {
+    this.canvas = canvas
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('Canvas not supported')
+    this.ctx = ctx
 
-  const keys = new Set<string>()
-  const mouse = { x: 0, y: 0, down: false }
+    this.player = this.makePlayer('player', false, 180, 300)
+    this.bots = Array.from({ length: 5 }, (_, i) => this.makePlayer(`bot-${i + 1}`, true, 500 + i * 120, 300))
+    this.platforms = this.makeMap()
+    this.pickups = this.makePickups()
 
-  const resize = () => {
-    const scale = Math.min(window.innerWidth / 1280, window.innerHeight / 720)
-    canvas.style.width = `${1280 * scale}px`
-    canvas.style.height = `${720 * scale}px`
+    window.addEventListener('keydown', this.onKeyDown)
+    window.addEventListener('keyup', this.onKeyUp)
+    canvas.addEventListener('mousemove', this.onMouseMove)
+    canvas.addEventListener('mousedown', this.onMouseDown)
+    window.addEventListener('mouseup', this.onMouseUp)
   }
 
-  const respawnPlayer = () => {
-    player.pos = { x: 180, y: 560 }
-    player.vel = { x: 0, y: 0 }
-    jetFuel = 100
-    deaths += 1
+  makePlayer(id: string, isBot: boolean, x: number, y: number): PlayerState {
+    return {
+      id,
+      isBot,
+      x,
+      y,
+      vx: 0,
+      vy: 0,
+      facing: 1,
+      health: 100,
+      maxHealth: 100,
+      jet: 100,
+      maxJet: 100,
+      weapon: DEFAULT_WEAPON,
+      kills: 0,
+      deaths: 0,
+      alive: true,
+      respawnAt: 0,
+      shootCooldown: 0,
+    }
   }
 
-  const respawnBot = (bot: Entity, index: number) => {
-    bot.pos = { x: 600 + index * 120, y: 560 - (index % 2) * 80 }
-    bot.vel = { x: 0, y: 0 }
+  makeMap(): Platform[] {
+    return [
+      { x: 0, y: 560, w: 1600, h: 40 },
+      { x: 120, y: 450, w: 240, h: 22 },
+      { x: 420, y: 390, w: 180, h: 22 },
+      { x: 680, y: 460, w: 220, h: 22 },
+      { x: 980, y: 360, w: 220, h: 22 },
+      { x: 1280, y: 470, w: 200, h: 22 },
+    ]
   }
 
-  const drawEntity = (e: Entity) => {
-    ctx.beginPath()
-    ctx.fillStyle = e.color
-    ctx.arc(e.pos.x, e.pos.y, e.radius, 0, Math.PI * 2)
-    ctx.fill()
+  makePickups(): Pickup[] {
+    return [
+      { x: 260, y: 410, type: 'health', value: 35, active: true },
+      { x: 520, y: 350, type: 'jet', value: 50, active: true },
+      { x: 820, y: 420, type: 'ammo', value: 1, active: true },
+      { x: 1100, y: 320, type: 'health', value: 35, active: true },
+    ]
   }
 
-  const endGame = (winner: 'player' | 'bots') => {
-    if (finished) return
-    finished = true
-    running = false
-    const accuracy = shots > 0 ? Math.round((hits / shots) * 100) : 0
-    onFinish({ winner, kills, deaths, accuracy })
+  onKeyDown = (e: KeyboardEvent) => this.keys.add(e.key.toLowerCase())
+  onKeyUp = (e: KeyboardEvent) => this.keys.delete(e.key.toLowerCase())
+  onMouseMove = (e: MouseEvent) => {
+    const rect = this.canvas.getBoundingClientRect()
+    this.mouse.x = (e.clientX - rect.left) * (this.canvas.width / rect.width)
+    this.mouse.y = (e.clientY - rect.top) * (this.canvas.height / rect.height)
+  }
+  onMouseDown = () => (this.mouse.down = true)
+  onMouseUp = () => (this.mouse.down = false)
+
+  getSnapshot(): GameSnapshot {
+    return {
+      winner: this.winner,
+      kills: this.player.kills,
+      deaths: this.player.deaths,
+      accuracy: this.stats.shots ? this.stats.hits / this.stats.shots : 0,
+    }
   }
 
-  const update = (t: number) => {
-    if (!running) return
+  update(ts: number) {
+    const dt = this.lastTs ? Math.min((ts - this.lastTs) / 1000, 0.033) : 0.016
+    this.lastTs = ts
+    if (!this.running) return
 
-    const dt = Math.min(0.032, (t - last) / 1000)
-    last = t
+    this.timeLeft -= dt * 1000
+    if (this.timeLeft <= 0) {
+      this.finish(this.player.kills >= this.bots.reduce((a, b) => a + b.kills, 0) ? 'player' : 'bots')
+      return
+    }
 
-    const elapsed = (t - startTime) / 1000
-    const timeLeft = Math.max(0, 300 - elapsed)
+    this.updatePlayer(this.player, dt, false)
+    for (const bot of this.bots) this.updatePlayer(bot, dt, true)
+    this.updateProjectiles(dt)
+    this.updatePickups()
+    this.draw()
 
-    shotCooldown = Math.max(0, shotCooldown - dt)
+    if (this.player.kills >= this.killLimit) this.finish('player')
+    if (this.bots.some((b) => b.kills >= this.killLimit)) this.finish('bots')
+  }
 
-    const speed = 260
-    if (keys.has('a') || keys.has('ArrowLeft')) player.vel.x = -speed
-    else if (keys.has('d') || keys.has('ArrowRight')) player.vel.x = speed
-    else player.vel.x *= 0.8
+  finish(winner: 'player' | 'bots') {
+    this.running = false
+    this.winner = winner
+  }
 
-    if ((keys.has(' ') || keys.has('Spacebar')) && jetFuel > 0) {
-      player.vel.y -= 1100 * dt
-      jetFuel = Math.max(0, jetFuel - 25 * dt)
+  updatePlayer(p: PlayerState, dt: number, isBot: boolean) {
+    if (!p.alive) {
+      if (performance.now() >= p.respawnAt) {
+        p.alive = true
+        p.health = p.maxHealth
+        p.jet = p.maxJet
+        p.x = isBot ? 600 + Math.random() * 500 : 180
+        p.y = 200
+      } else return
+    }
+
+    p.vy += 1800 * dt
+
+    const left = isBot ? false : this.keys.has('a') || this.keys.has('arrowleft')
+    const right = isBot ? false : this.keys.has('d') || this.keys.has('arrowright')
+    const jump = isBot ? false : this.keys.has(' ')
+    const shoot = isBot ? Math.random() < 0.04 : this.mouse.down
+
+    if (!isBot) {
+      if (left) p.vx = -260
+      else if (right) p.vx = 260
+      else p.vx *= 0.84
+      if (jump && p.jet > 0) {
+        p.vy -= 950 * dt
+        p.jet = Math.max(0, p.jet - 30 * dt)
+      } else p.jet = Math.min(p.maxJet, p.jet + 18 * dt)
+      p.facing = this.mouse.x >= p.x ? 1 : -1
+      if (shoot) this.tryShoot(p, this.mouse)
     } else {
-      jetFuel = Math.min(100, jetFuel + 12 * dt)
+      const target = this.player.alive ? this.player : this.bots.find((b) => b.alive) || this.player
+      p.facing = target.x >= p.x ? 1 : -1
+      p.vx += (target.x > p.x ? 1 : -1) * 12
+      if (Math.abs(target.y - p.y) > 80 && p.jet > 0 && Math.random() < 0.02) {
+        p.vy -= 850 * dt
+        p.jet -= 20 * dt
+      }
+      if (Math.random() < 0.02) this.tryShoot(p, { x: target.x, y: target.y })
     }
 
-    player.vel.y += gravity * dt
-    player.pos.x += player.vel.x * dt
-    player.pos.y += player.vel.y * dt
+    p.x += p.vx * dt
+    p.y += p.vy * dt
+    this.resolvePlatforms(p)
+    p.shootCooldown = Math.max(0, p.shootCooldown - dt * 1000)
+  }
 
-    if (player.pos.y >= 560) {
-      player.pos.y = 560
-      player.vel.y = 0
+  tryShoot(p: PlayerState, target: Vec2) {
+    if (p.shootCooldown > 0) return
+    const w = WEAPONS[p.weapon]
+    p.shootCooldown = w.fireRate
+    this.stats.shots++
+
+    const dx = target.x - p.x
+    const dy = target.y - p.y
+    const ang = Math.atan2(dy, dx) + (Math.random() - 0.5) * w.spread
+    const speed = w.speed
+
+    const count = w.pellets ?? 1
+    for (let i = 0; i < count; i++) {
+      const spread = count > 1 ? (i - (count - 1) / 2) * 0.06 : 0
+      this.projectiles.push({
+        x: p.x,
+        y: p.y,
+        vx: Math.cos(ang + spread) * speed,
+        vy: Math.sin(ang + spread) * speed,
+        ownerId: p.id,
+        damage: w.damage,
+        life: 1.4,
+        radius: w.id === 'rocket' ? 7 : 3,
+      })
     }
+  }
 
-    player.pos.x = Math.max(40, Math.min(canvas.width - 40, player.pos.x))
+  resolvePlatforms(p: PlayerState) {
+    for (const plat of this.platforms) {
+      const onTop =
+        p.x > plat.x - 18 &&
+        p.x < plat.x + plat.w + 18 &&
+        p.y + 20 > plat.y &&
+        p.y + 20 < plat.y + plat.h &&
+        p.vy >= 0
+      if (onTop) {
+        p.y = plat.y - 20
+        p.vy = 0
+      }
+    }
+    if (p.y > this.height + 300) this.kill(p)
+  }
 
-    if (mouse.down && shotCooldown === 0) {
-      shots += 1
-      shotCooldown = 0.18
-
-      const dx = mouse.x - player.pos.x
-      const dy = mouse.y - player.pos.y
-      const dist = Math.hypot(dx, dy) || 1
-      const dirX = dx / dist
-      const dirY = dy / dist
-
-      for (let i = 0; i < bots.length; i++) {
-        const bot = bots[i]
-        const bx = bot.pos.x - player.pos.x
-        const by = bot.pos.y - player.pos.y
-        const proj = bx * dirX + by * dirY
-        const perp = Math.abs(bx * dirY - by * dirX)
-
-        if (proj > 0 && proj < 900 && perp < bot.radius + 8) {
-          hits += 1
-          kills += 1
-          respawnBot(bot, i)
-          break
+  updateProjectiles(dt: number) {
+    for (const pr of this.projectiles) {
+      pr.life -= dt
+      pr.x += pr.vx * dt
+      pr.y += pr.vy * dt
+      for (const target of [this.player, ...this.bots]) {
+        if (!target.alive || target.id === pr.ownerId) continue
+        const dx = target.x - pr.x
+        const dy = target.y - pr.y
+        if (Math.hypot(dx, dy) < 18 + pr.radius) {
+          this.stats.hits++
+          target.health -= pr.damage
+          pr.life = 0
+          if (target.health <= 0) this.kill(target, pr.ownerId)
         }
       }
     }
+    this.projectiles = this.projectiles.filter((p) => p.life > 0)
+  }
 
-    for (let i = 0; i < bots.length; i++) {
-      const bot = bots[i]
-      const dir = Math.sign(player.pos.x - bot.pos.x)
-      bot.vel.x = dir * 140
-      bot.pos.x += bot.vel.x * dt
-      bot.pos.x = Math.max(40, Math.min(canvas.width - 40, bot.pos.x))
-
-      if (Math.random() < 0.003) bot.vel.y = -700
-      bot.vel.y += gravity * dt
-      bot.pos.y += bot.vel.y * dt
-
-      if (bot.pos.y >= 560) {
-        bot.pos.y = 560
-        bot.vel.y = 0
+  updatePickups() {
+    for (const pk of this.pickups) {
+      if (!pk.active) continue
+      const dx = this.player.x - pk.x
+      const dy = this.player.y - pk.y
+      if (Math.hypot(dx, dy) < 30) {
+        if (pk.type === 'health') this.player.health = Math.min(this.player.maxHealth, this.player.health + pk.value)
+        if (pk.type === 'jet') this.player.jet = Math.min(this.player.maxJet, this.player.jet + pk.value)
+        pk.active = false
       }
     }
+  }
 
-    if (kills >= 15) {
-      endGame('player')
-      return
+  kill(p: PlayerState, killerId?: string) {
+    p.alive = false
+    p.deaths++
+    p.respawnAt = performance.now() + 1800
+    if (killerId) {
+      const killer = [this.player, ...this.bots].find((x) => x.id === killerId)
+      if (killer) killer.kills++
+    }
+    if (p.id === this.player.id && this.player.deaths >= 15) this.finish('bots')
+  }
+
+  draw() {
+    const ctx = this.ctx
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
+
+    const scaleX = this.canvas.width / 960
+    const scaleY = this.canvas.height / 640
+    ctx.scale(scaleX, scaleY)
+
+    ctx.fillStyle = '#08131f'
+    ctx.fillRect(0, 0, 960, 640)
+
+    for (const plat of this.platforms) {
+      ctx.fillStyle = '#19324a'
+      ctx.fillRect(plat.x, plat.y, plat.w, plat.h)
+      ctx.fillStyle = '#2f6b48'
+      ctx.fillRect(plat.x, plat.y - 8, plat.w, 8)
     }
 
-    if (timeLeft <= 0) {
-      endGame('bots')
-      return
+    for (const pk of this.pickups) {
+      if (!pk.active) continue
+      ctx.fillStyle = pk.type === 'health' ? '#ff5b7a' : pk.type === 'jet' ? '#5bf7ff' : '#ffd95b'
+      ctx.beginPath()
+      ctx.arc(pk.x, pk.y, 8, 0, Math.PI * 2)
+      ctx.fill()
     }
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
-    ctx.fillStyle = '#07111f'
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    for (const pr of this.projectiles) {
+      ctx.strokeStyle = '#fff'
+      ctx.beginPath()
+      ctx.moveTo(pr.x, pr.y)
+      ctx.lineTo(pr.x - pr.vx * 0.01, pr.y - pr.vy * 0.01)
+      ctx.stroke()
+    }
 
-    ctx.fillStyle = '#16311f'
-    ctx.fillRect(0, 600, canvas.width, 120)
+    this.drawPlayer(this.player, '#7cf7c5')
+    for (const bot of this.bots) this.drawPlayer(bot, '#ff7b7b')
 
-    ctx.strokeStyle = '#2f6f4e'
-    ctx.lineWidth = 6
-    ctx.beginPath()
-    ctx.moveTo(0, 600)
-    ctx.lineTo(canvas.width, 600)
-    ctx.stroke()
-
-    drawEntity(player)
-    bots.forEach(drawEntity)
-
-    ctx.fillStyle = '#ffffff'
-    ctx.font = '20px sans-serif'
-    ctx.fillText(`Time: ${timeLeft.toFixed(0)}s`, 40, 40)
-    ctx.fillText(`Kills: ${kills}/15`, 40, 70)
-    ctx.fillText(`Jet: ${Math.round(jetFuel)}%`, 40, 100)
-    ctx.fillText(`Accuracy: ${shots ? Math.round((hits / shots) * 100) : 0}%`, 40, 130)
-
-    ctx.fillStyle = '#9be15d'
-    ctx.fillText('WASD/Arrows move • Space jetpack • Mouse aim/click shoot', 40, 680)
+    ctx.fillStyle = '#fff'
+    ctx.font = '16px Inter, sans-serif'
+    ctx.fillText(`Time: ${Math.max(0, Math.ceil(this.timeLeft / 1000))}`, 20, 28)
+    ctx.fillText(`Kills: ${this.player.kills} / ${this.killLimit}`, 20, 50)
+    ctx.fillText(`Health: ${Math.max(0, Math.floor(this.player.health))}`, 20, 72)
+    ctx.fillText(`Jet: ${Math.floor(this.player.jet)}`, 20, 94)
   }
 
-  const onKeyDown = (e: KeyboardEvent) => keys.add(e.key)
-  const onKeyUp = (e: KeyboardEvent) => keys.delete(e.key)
-  const onMouseMove = (e: MouseEvent) => {
-    const rect = canvas.getBoundingClientRect()
-    mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width)
-    mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height)
-  }
-  const onMouseDown = (e: MouseEvent) => {
-    e.preventDefault()
-    mouse.down = true
-  }
-  const onMouseUp = () => {
-    mouse.down = false
-  }
-
-  window.addEventListener('keydown', onKeyDown)
-  window.addEventListener('keyup', onKeyUp)
-  canvas.addEventListener('mousemove', onMouseMove)
-  canvas.addEventListener('mousedown', onMouseDown)
-  window.addEventListener('mouseup', onMouseUp)
-  window.addEventListener('resize', resize)
-  resize()
-
-  return {
-    update,
-    destroy() {
-      running = false
-      keys.clear()
-      mouse.down = false
-      window.removeEventListener('keydown', onKeyDown)
-      window.removeEventListener('keyup', onKeyUp)
-      canvas.removeEventListener('mousemove', onMouseMove)
-      canvas.removeEventListener('mousedown', onMouseDown)
-      window.removeEventListener('mouseup', onMouseUp)
-      window.removeEventListener('resize', resize)
-    },
+  drawPlayer(p: PlayerState, color: string) {
+    if (!p.alive) return
+    const ctx = this.ctx
+    ctx.fillStyle = color
+    ctx.fillRect(p.x - 10, p.y - 20, 20, 28)
+    ctx.fillStyle = '#000'
+    ctx.fillRect(p.x + (p.facing > 0 ? 2 : -8), p.y - 14, 5, 5)
   }
 }
