@@ -15,8 +15,9 @@ export function createGame(
   if (!ctx) throw new Error('Canvas context unavailable')
 
   let running = true
+  let finished = false
   let last = performance.now()
-  let startTime = performance.now()
+  const startTime = performance.now()
 
   const player: Entity = {
     pos: { x: 180, y: 560 },
@@ -37,12 +38,11 @@ export function createGame(
   let shots = 0
   let hits = 0
   let shotCooldown = 0
-  let gravity = 1800
-  let playerOnGround = true
+  const gravity = 1800
   let jetFuel = 100
 
   const keys = new Set<string>()
-  let mouse = { x: 0, y: 0, down: false }
+  const mouse = { x: 0, y: 0, down: false }
 
   const resize = () => {
     const scale = Math.min(window.innerWidth / 1280, window.innerHeight / 720)
@@ -69,6 +69,14 @@ export function createGame(
     ctx.fill()
   }
 
+  const endGame = (winner: 'player' | 'bots') => {
+    if (finished) return
+    finished = true
+    running = false
+    const accuracy = shots > 0 ? Math.round((hits / shots) * 100) : 0
+    onFinish({ winner, kills, deaths, accuracy })
+  }
+
   const update = (t: number) => {
     if (!running) return
 
@@ -85,8 +93,7 @@ export function createGame(
     else if (keys.has('d') || keys.has('ArrowRight')) player.vel.x = speed
     else player.vel.x *= 0.8
 
-    const jetting = keys.has(' ') && jetFuel > 0
-    if (jetting) {
+    if ((keys.has(' ') || keys.has('Spacebar')) && jetFuel > 0) {
       player.vel.y -= 1100 * dt
       jetFuel = Math.max(0, jetFuel - 25 * dt)
     } else {
@@ -100,9 +107,6 @@ export function createGame(
     if (player.pos.y >= 560) {
       player.pos.y = 560
       player.vel.y = 0
-      playerOnGround = true
-    } else {
-      playerOnGround = false
     }
 
     player.pos.x = Math.max(40, Math.min(canvas.width - 40, player.pos.x))
@@ -110,6 +114,7 @@ export function createGame(
     if (mouse.down && shotCooldown === 0) {
       shots += 1
       shotCooldown = 0.18
+
       const dx = mouse.x - player.pos.x
       const dy = mouse.y - player.pos.y
       const dist = Math.hypot(dx, dy) || 1
@@ -122,6 +127,7 @@ export function createGame(
         const by = bot.pos.y - player.pos.y
         const proj = bx * dirX + by * dirY
         const perp = Math.abs(bx * dirY - by * dirX)
+
         if (proj > 0 && proj < 900 && perp < bot.radius + 8) {
           hits += 1
           kills += 1
@@ -138,26 +144,23 @@ export function createGame(
       bot.pos.x += bot.vel.x * dt
       bot.pos.x = Math.max(40, Math.min(canvas.width - 40, bot.pos.x))
 
-      if (Math.random() < 0.003) {
-        bot.vel.y = -700
-      }
+      if (Math.random() < 0.003) bot.vel.y = -700
       bot.vel.y += gravity * dt
       bot.pos.y += bot.vel.y * dt
+
       if (bot.pos.y >= 560) {
         bot.pos.y = 560
         bot.vel.y = 0
       }
     }
 
-    if (kills >= 15 || timeLeft <= 0) {
-      running = false
-      const accuracy = shots > 0 ? Math.round((hits / shots) * 100) : 0
-      onFinish({
-        winner: kills >= 15 ? 'player' : 'bots',
-        kills,
-        deaths,
-        accuracy,
-      })
+    if (kills >= 15) {
+      endGame('player')
+      return
+    }
+
+    if (timeLeft <= 0) {
+      endGame('bots')
       return
     }
 
@@ -196,8 +199,13 @@ export function createGame(
     mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width)
     mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height)
   }
-  const onMouseDown = () => (mouse.down = true)
-  const onMouseUp = () => (mouse.down = false)
+  const onMouseDown = (e: MouseEvent) => {
+    e.preventDefault()
+    mouse.down = true
+  }
+  const onMouseUp = () => {
+    mouse.down = false
+  }
 
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('keyup', onKeyUp)
@@ -211,6 +219,8 @@ export function createGame(
     update,
     destroy() {
       running = false
+      keys.clear()
+      mouse.down = false
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
       canvas.removeEventListener('mousemove', onMouseMove)
