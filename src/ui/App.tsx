@@ -1,104 +1,92 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useAccount, useDisconnect } from 'wagmi'
-import { createGame } from '../game/Game'
+import { useEffect, useRef, useState } from 'react'
+import { useAccount, useConnect } from 'wagmi'
+import { Game } from '../game/Game'
 import type { GameSnapshot } from '../game/types'
 
 type Screen = 'menu' | 'game' | 'results'
 
 export default function App() {
-  const { address, isConnected } = useAccount()
-  const { disconnect } = useDisconnect()
-
+  const { isConnected } = useAccount()
+  const { connectors, connect } = useConnect()
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const gameRef = useRef<ReturnType<typeof createGame> | null>(null)
-  const rafRef = useRef<number | null>(null)
+  const gameRef = useRef<Game | null>(null)
 
   const [screen, setScreen] = useState<Screen>('menu')
-  const [snapshot, setSnapshot] = useState<GameSnapshot | null>(null)
-
-  const connectedLabel = useMemo(() => {
-    if (!address) return ''
-    return `${address.slice(0, 6)}...${address.slice(-4)}`
-  }, [address])
-
-  const startGame = () => {
-    if (!isConnected) return
-    setScreen('game')
-  }
-
-  const backToMenu = () => {
-    setScreen('menu')
-    setSnapshot(null)
-  }
+  const [result, setResult] = useState<GameSnapshot | null>(null)
 
   useEffect(() => {
     if (screen !== 'game') return
     const canvas = canvasRef.current
     if (!canvas) return
 
-    const game = createGame(canvas, (nextSnapshot) => {
-      setSnapshot(nextSnapshot)
-      setScreen('results')
-    })
-
-    gameRef.current = game
-
-    const loop = (t: number) => {
-      game.update(t)
-      rafRef.current = requestAnimationFrame(loop)
+    const resize = () => {
+      const dpr = window.devicePixelRatio || 1
+      const w = Math.min(window.innerWidth, 960)
+      const h = Math.min(window.innerHeight, 640)
+      canvas.style.width = `${w}px`
+      canvas.style.height = `${h}px`
+      canvas.width = Math.floor(w * dpr)
+      canvas.height = Math.floor(h * dpr)
     }
 
-    rafRef.current = requestAnimationFrame(loop)
+    resize()
+    window.addEventListener('resize', resize)
+
+    gameRef.current = new Game(canvas)
+
+    let raf = 0
+    const loop = (ts: number) => {
+      gameRef.current?.update(ts)
+      const snap = gameRef.current?.getSnapshot()
+      if (snap && gameRef.current && !gameRef.current.running) {
+        setResult(snap)
+        setScreen('results')
+        return
+      }
+      raf = requestAnimationFrame(loop)
+    }
+    raf = requestAnimationFrame(loop)
 
     return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
-      game.destroy()
+      window.removeEventListener('resize', resize)
+      cancelAnimationFrame(raf)
       gameRef.current = null
     }
   }, [screen])
 
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <div className="brand">Arena Shooter Web3</div>
-        <div className="wallet-row">
+    <div style={{ color: '#fff', background: '#06111f', minHeight: '100vh', padding: 16 }}>
+      {screen === 'menu' && (
+        <div style={{ maxWidth: 520, margin: '0 auto', textAlign: 'center' }}>
+          <h1>Mini Arena</h1>
+          <p>2D arena shooter with wallet-gated play.</p>
+
           {!isConnected ? (
-            <button onClick={() => alert('Use the wallet button from Web3Modal')}>
-              Connect Wallet
-            </button>
+            <button onClick={() => connect({ connector: connectors[0] })}>Connect Wallet</button>
           ) : (
-            <>
-              <span className="wallet-address">{connectedLabel}</span>
-              <button onClick={() => disconnect()}>Disconnect</button>
-            </>
+            <button onClick={() => setScreen('game')}>PLAY</button>
           )}
         </div>
-      </header>
-
-      {screen === 'menu' && (
-        <main className="menu">
-          <h1>Mini Militia-style Arena</h1>
-          <p>5 bots. 5 minutes. First to 15 kills.</p>
-          <button onClick={startGame} disabled={!isConnected}>
-            PLAY
-          </button>
-        </main>
       )}
 
       {screen === 'game' && (
-        <main className="game-wrap">
-          <canvas ref={canvasRef} width={1280} height={720} />
-        </main>
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+            <button onClick={() => setScreen('menu')}>Back</button>
+            <div>WASD / Mouse / Space / R / 1-3</div>
+          </div>
+          <canvas ref={canvasRef} />
+        </div>
       )}
 
-      {screen === 'results' && (
-        <main className="results">
-          <h2>{snapshot?.winner === 'player' ? 'VICTORY' : 'DEFEAT'}</h2>
-          <p>Kills: {snapshot?.kills ?? 0}</p>
-          <p>Deaths: {snapshot?.deaths ?? 0}</p>
-          <p>Accuracy: {snapshot?.accuracy ?? 0}%</p>
-          <button onClick={backToMenu}>Rematch</button>
-        </main>
+      {screen === 'results' && result && (
+        <div style={{ maxWidth: 520, margin: '0 auto', textAlign: 'center' }}>
+          <h1>{result.winner === 'player' ? 'VICTORY' : 'DEFEAT'}</h1>
+          <p>Kills: {result.kills}</p>
+          <p>Deaths: {result.deaths}</p>
+          <p>Accuracy: {(result.accuracy * 100).toFixed(1)}%</p>
+          <button onClick={() => setScreen('menu')}>Rematch</button>
+        </div>
       )}
     </div>
   )
