@@ -1,5 +1,5 @@
 import { createConfig, http } from 'wagmi'
-import { polygon, base } from 'wagmi/chains'
+import { base, polygon } from 'wagmi/chains'
 import { injected } from 'wagmi/connectors'
 import { createWeb3Modal } from '@web3modal/wagmi/react'
 import { QueryClient } from '@tanstack/react-query'
@@ -23,6 +23,10 @@ export const wagmiConfig = createConfig({
     [polygon.id]: http(),
   },
 })
+
+if (!projectId) {
+  throw new Error('Missing VITE_WALLETCONNECT_PROJECT_ID')
+}
 
 createWeb3Modal({
   wagmiConfig,
